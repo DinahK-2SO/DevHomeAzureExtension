@@ -1,14 +1,20 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System;
 using System.Diagnostics;
+using System.Net;
 using System.Reflection;
+using System.Text;
+using System.Threading.Tasks;
 using Azure;
 using Azure.AI.OpenAI;
 using DevHomeAzureExtension.Contracts;
 using Microsoft.ML.Tokenizers;
 using Newtonsoft.Json;
 using Serilog;
+using Windows.ApplicationModel.Chat;
+using Windows.Media.Protection.PlayReady;
 
 namespace DevHomeAzureExtension.QuickStartPlayground;
 
@@ -145,24 +151,48 @@ public sealed class AzureOpenAIService : IAzureOpenAIService
         var prompts = systemInstructions + "\n\n" + userMessage;
         var maxTokens = ComputeMaxTokens(prompts);
 
-        var response = await openAIClient.GetCompletionsAsync(
-            new CompletionsOptions()
+        if (CompletionDeploymentName != "gpt-4o")
+        {
+            var response = await openAIClient.GetCompletionsAsync(
+                new CompletionsOptions()
+                {
+                    DeploymentName = CompletionDeploymentName,
+                    Prompts =
+                    {
+                        prompts,
+                    },
+                    Temperature = 0.01F,
+                    MaxTokens = maxTokens,
+                });
+
+            if (response.Value.Choices[0].FinishReason == CompletionsFinishReason.TokenLimitReached)
+            {
+                throw new InvalidDataException("Token limit reached while generating response");
+            }
+
+            return response.Value.Choices[0].Text;
+        }
+        else
+        {
+            var chatCompletionsOptions = new ChatCompletionsOptions()
             {
                 DeploymentName = CompletionDeploymentName,
-                Prompts =
+                Messages =
                 {
-                    prompts,
+                    new ChatRequestSystemMessage("You are a helpful assistant."),
+                    new ChatRequestUserMessage(prompts),
                 },
-                Temperature = 0.01F,
-                MaxTokens = maxTokens,
-            });
+            };
 
-        if (response.Value.Choices[0].FinishReason == CompletionsFinishReason.TokenLimitReached)
-        {
-            throw new InvalidDataException("Token limit reached while generating response");
+            Response<ChatCompletions> response = await openAIClient.GetChatCompletionsAsync(chatCompletionsOptions);
+            var ans = response.Value.Choices[0].Message.Content;
+
+            var logFilePath = @"c:\ado\logs.txt";
+            await File.AppendAllTextAsync(logFilePath, "\n[ask]\n" + prompts);
+            await File.AppendAllTextAsync(logFilePath, "\n[ans]\n" + ans);
+
+            return ans;
         }
-
-        return response.Value.Choices[0].Text;
     }
 
     private int ComputeMaxTokens(string inputPrompt)

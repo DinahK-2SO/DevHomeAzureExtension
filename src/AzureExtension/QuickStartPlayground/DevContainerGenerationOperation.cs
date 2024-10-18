@@ -1,6 +1,7 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System.Linq;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text;
 using System.Text.Json;
@@ -160,8 +161,14 @@ public sealed class DevContainerGenerationOperation : IQuickStartProjectGenerati
         // file appearing after that.
 
         // Trim whitespace at the beginning and get line entries.
-        var lines = inputString.TrimStart().Replace("\r", string.Empty).Split('\n');
-        string? filename = null;
+        inputString = inputString.Trim().Replace("\r\n", Environment.NewLine).Replace("\n", Environment.NewLine);
+        string[] lines = inputString.Split(Environment.NewLine)
+            .Where(line => !string.IsNullOrEmpty(line)).ToArray();
+
+        string filename = string.Empty;
+
+        // create a dictionary of files
+        Dictionary<string, string> filesToWrite = new Dictionary<string, string>();
 
         foreach (var line in lines)
         {
@@ -193,19 +200,66 @@ public sealed class DevContainerGenerationOperation : IQuickStartProjectGenerati
                     _log.Error($"File already exists: {filename}");
                 }
 
-                _log.Information("Creating file: {filename}", filename);
-                File.WriteAllText(filename, string.Empty);
+                // _log.Information("Creating file: {filename}", filename);
+                // File.WriteAllText(filename, string.Empty);
+                if (filesToWrite.ContainsKey(filename))
+                {
+                    _log.Error($"File already exists in dictionary: {filename}");
+                }
+
+                filesToWrite[filename] = string.Empty;
             }
             else
             {
                 if (string.IsNullOrEmpty(filename))
                 {
-                    _log.Information("Error: no filename set.");
-                    return;
+                    _log.Information($"Error: no filename set, skip line:\n{line}");
+                    continue;
                 }
 
-                File.AppendAllText(filename, line + Environment.NewLine);
+                // File.AppendAllText(filename, line + Environment.NewLine);
+                filesToWrite[filename] += line + Environment.NewLine;
             }
+        }
+
+        foreach (var (file, content) in filesToWrite)
+        {
+            if (string.IsNullOrEmpty(file))
+            {
+                _log.Warning("Filename shouldn't be null or empty: {file}", file);
+                continue;
+            }
+
+            string nonNullableFile = file!.Trim();
+            string nonNullableContent = content!.Trim();
+
+            if (nonNullableContent.StartsWith("```", StringComparison.Ordinal))
+            {
+                var fileLines = nonNullableContent.Split(Environment.NewLine).ToList();
+
+                if (fileLines.Count <= 2)
+                {
+                    nonNullableContent = string.Empty;
+                }
+                else
+                {
+                    while (fileLines?.Last() != null && !fileLines.Last().StartsWith("```", StringComparison.Ordinal))
+                    {
+                        fileLines.RemoveAt(fileLines.Count - 1);
+                    }
+
+                    if (fileLines != null && fileLines.Count >= 2)
+                    {
+                        // Remove the first and last lines
+                        fileLines.RemoveAt(0);
+                        fileLines.RemoveAt(fileLines.Count - 1);
+                    }
+
+                    nonNullableContent = string.Join(Environment.NewLine, fileLines ?? []);
+                }
+            }
+
+            File.WriteAllText(file, nonNullableContent);
         }
     }
 
